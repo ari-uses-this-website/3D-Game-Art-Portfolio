@@ -1,0 +1,411 @@
+var PreviewDirective = /** @class */ (function () {
+    function PreviewDirective(AppResources, I18n, $analytics, Link, $translate) {
+        var _this = this;
+        this.AppResources = AppResources;
+        this.I18n = I18n;
+        this.$analytics = $analytics;
+        this.Link = Link;
+        this.$translate = $translate;
+        this.restrict = 'E';
+        this.priority = 99;
+        this.scope = {
+            banner: '=',
+            ratio: '=',
+            livePreview: '=',
+            langText: '='
+        };
+        // templateUrl = () => this.AppResources.getUrlFor('html/test.directive.html', 'collabco.banner');
+        this.link = function ($scope, $element, $attrs) {
+            var id;
+            var block;
+            var ratio;
+            var ratioName;
+            var aspectRatio;
+            var mainAspectRatio;
+            var elements;
+            var animationDelay;
+            var i18n = _this.I18n;
+            var analytics = _this.$analytics;
+            var Link = _this.Link;
+            var $translate = _this.$translate;
+            var width;
+            var height;
+            var timeoutId;
+            var parentKeydownTarget;
+            var announcer;
+            if (!$scope.livePreview) {
+                // animationDelay = '0.5s';
+            }
+            if (!$scope.langText) {
+                // TODO: When $scope.lang is not set, my plan is that it would be on a user-facing tile
+                // (you still need it on the editor to change languages on fly I guess), then we would use
+                // the I18n.getLocalized to get text/svgHeight/svgWidth values.
+            }
+            var ratios = {
+                '1x1': { x: 1, y: 1 },
+                '2x1': { x: 2, y: 1 },
+                '3x1': { x: 3, y: 1 },
+                '4x1': { x: 4, y: 1 },
+                '5x1': { x: 5, y: 1 }
+            };
+            var ratioList = [];
+            var sortedList = [];
+            var sortedRatioList = [];
+            // These are highlighted by tslint due to /apps/ folder being outside of the project
+            var imagePath = MydayLoader.bootstrap.cdnBaseUrl + "/" + MydayLoader.bootstrap.tenantId + "/uploads/";
+            var backgroundPath = MydayLoader.bootstrap.cdnBaseUrl + "/" + MydayLoader.bootstrap.tenantId + "/banner/";
+            timeoutId = setTimeout(function () {
+                createPreview();
+            });
+            $scope.$on('$destroy', function () {
+                clearTimeout(timeoutId);
+                if (parentKeydownTarget) {
+                    parentKeydownTarget.off('keydown', onParentKeyDown);
+                }
+                if (announcer && announcer.parentNode) {
+                    announcer.parentNode.removeChild(announcer);
+                }
+            });
+            function onParentKeyDown(e) {
+                if (e.key === 'Enter') {
+                    _openLink('', 'BannerKeyboard');
+                }
+            }
+            function createPreview() {
+                width = $element[0].offsetWidth;
+                block = $element[0];
+                ratio = $scope.ratio;
+                aspectRatio = ratio.y / ratio.x;
+                height = width * aspectRatio;
+                ratioName = $scope.ratio.x + 'x' + $scope.ratio.y;
+                elements = $scope.banner.elements;
+                if ($scope.livePreview) {
+                    $element[0].style['height'] = height + 'px';
+                }
+                block.onclick = function () {
+                    _openLink('', 'Banner');
+                };
+                parentKeydownTarget = $element.parent();
+                parentKeydownTarget.on('keydown', onParentKeyDown);
+                announcer = document.createElement('span');
+                announcer.className = 'sr-only';
+                announcer.setAttribute('aria-live', 'assertive');
+                announcer.setAttribute('aria-atomic', 'true');
+                parentKeydownTarget[0].appendChild(announcer);
+                loadRatios();
+                loadBackground();
+                loadAllElements();
+            }
+            function loadRatios() {
+                var list = [];
+                Object.keys(ratios).forEach(function (key) {
+                    list.push([key, ratios[key].y / ratios[key].x]);
+                });
+                var goal = $scope.ratio.y / $scope.ratio.x;
+                list.sort(function (a, b) { return Math.abs(goal - a[1]) - Math.abs(goal - b[1]); });
+                sortedRatioList = list;
+            }
+            function findInRatios(s) {
+                var a = null;
+                var firstElementFromList;
+                for (var i = 0; i < $scope.banner.ratios.length; i++) {
+                    if (s === $scope.banner.ratios[i].ratio) {
+                        a = i;
+                    }
+                    if ($scope.banner.ratios[i].ratio === sortedRatioList[0][0]) {
+                        firstElementFromList = i;
+                    }
+                }
+                if (a == null) {
+                    a = firstElementFromList;
+                }
+                return a;
+            }
+            function loadBackground() {
+                var rat = $scope.banner.ratios[findInRatios(ratioName)];
+                if (!rat)
+                    return;
+                if (rat.fileId) {
+                    var background = backgroundPath + $scope.banner.id + '/' + $scope.banner.version + '/' + rat.ratio;
+                    block.style['background'] = "url('" + background + "')";
+                    block.style['background-size'] = 'cover';
+                }
+                else {
+                    block.style['background'] = rat.background;
+                }
+            }
+            function loadAllElements() {
+                var rat = $scope.banner.ratios[findInRatios(ratioName)];
+                if (rat && rat.elements && rat.elements.length) {
+                    for (var i = 0; i < rat.elements.length; i++) {
+                        loadElement(rat.elements[i]);
+                    }
+                }
+            }
+            function loadElement(element) {
+                if (element.texts) {
+                    // console.log('** Banner App ** createElement() => create text element');
+                    createText(element.id);
+                }
+                else {
+                    // console.log('** Banner App ** createElement() => create image element');
+                    createImage(element.id);
+                }
+            }
+            function getElementById(id) {
+                for (var i = 0; i < $scope.banner.elements.length; i++) {
+                    if (id === $scope.banner.elements[i].id) {
+                        return $scope.banner.elements[i];
+                    }
+                }
+            }
+            function createImage(elementId) {
+                var imageElement = document.createElement('a');
+                imageElement.className += ' tile__container-image';
+                imageElement.className += ' ' + loadAnimation(elementId);
+                var elementStyles = createStyleObjectForImage(elementId);
+                if (checkElementLink(elementId)) {
+                    imageElement.onclick = function (e) {
+                        e.stopPropagation();
+                        _openLink(elementId, 'BannerImage');
+                    };
+                }
+                Object.keys(elementStyles).forEach(function (key) {
+                    if (elementStyles[key]) {
+                        imageElement.style[key] = elementStyles[key];
+                        if (key === 'z-index') {
+                            imageElement.style[key] = String(parseInt(imageElement.style[key]) + 3);
+                        }
+                    }
+                });
+                $element[0].appendChild(imageElement);
+            }
+            function _openLink(elementId, directFrom) {
+                var url = getElementLink(elementId);
+                analytics.eventTrack('Banner', { category: directFrom + ' Click', label: 'Title: ' + $scope.banner.name + ' | URL: ' + url });
+                if ($scope.banner.newTab) {
+                    if (announcer) {
+                        announcer.textContent = $translate.instant('app.collabco-banner.LINK_OPENS_IN_NEW_WINDOW');
+                    }
+                    Link.open(url);
+                }
+                else {
+                    Link.open(url, '_self');
+                }
+            }
+            function createBackground(key) {
+                var style = 'transparent';
+                for (var i = 0; i < $scope.banner.elements.length; i++) {
+                    if ($scope.banner.elements[i].id === key) {
+                        style = "url('" + imagePath + $scope.banner.elements[i].fileId + "')";
+                    }
+                }
+                return style;
+            }
+            function loadAnimation(elementId) {
+                var animation = undefined;
+                for (var i = 0; i < $scope.banner.elements.length; i++) {
+                    if ($scope.banner.elements[i].id === elementId) {
+                        animation = $scope.banner.elements[i].animation;
+                    }
+                }
+                return animation;
+            }
+            function getElementByIdInRatio(elementId, ratioKey) {
+                var ratioElement = false;
+                for (var i = 0; i < $scope.banner.ratios[ratioKey].elements.length; i++) {
+                    if ($scope.banner.ratios[ratioKey].elements[i].id === elementId) {
+                        ratioElement = $scope.banner.ratios[ratioKey].elements[i];
+                    }
+                }
+                return ratioElement;
+            }
+            function getNearestSvg(elementId) {
+                var thisRatio;
+                for (var i = 0; i < sortedRatioList.length; i++) {
+                    var a = getElementByIdInRatio(elementId, findInRatios(sortedRatioList[i][0]));
+                    if (!thisRatio) {
+                        thisRatio = a;
+                    }
+                }
+                return thisRatio;
+            }
+            function checkElementLink(elementId) {
+                if (Object.keys(getElementById(elementId).links).length !== 0) {
+                    return true;
+                }
+                return false;
+            }
+            function getElementLink(elementId) {
+                if (!elementId) {
+                    return $scope.banner.translatedLink;
+                }
+                return i18n.getLocalized(getElementById(elementId).links, false);
+            }
+            function createText(elementId) {
+                var elementInRatio = getNearestSvg(elementId);
+                var textElement = document.createElement('a');
+                textElement.className += ' md-link-block';
+                if (checkElementLink(elementId)) {
+                    textElement.onclick = function (e) {
+                        e.stopPropagation();
+                        _openLink(elementId, 'BannerText');
+                    };
+                }
+                var width = parseInt(elementInRatio.svgWidth && elementInRatio.svgWidth[$scope.langText] || 0, 10) + 1;
+                var height = parseInt(elementInRatio.svgHeight && elementInRatio.svgHeight[$scope.langText] || 0, 10) + 1;
+                var text = elementInRatio.texts && elementInRatio.texts[$scope.langText] || '';
+                // foreignObject is not supported on IE, but it is on all other browsers. Check for IE
+                var ua = window.navigator.userAgent;
+                var msie = ua.indexOf('Trident/');
+                if (msie !== -1) {
+                    textElement.innerHTML = "\n        <svg style=\"display: block; word-break: normal;\" viewBox=\"0 0 " + width + " " + height + "\" preserveAspectRatio=\"xMidYMid meet\">\n          <div style=\"top: 10px; position: absolute;\" width=\"100%\" height=\"100%\">" + text + "</div>\n        </svg>\n      ";
+                }
+                else {
+                    textElement.innerHTML = "\n        <svg style=\"display: block; word-break: normal;\" viewBox=\"0 0 " + width + " " + height + "\" preserveAspectRatio=\"xMidYMid meet\">\n          <foreignObject width=\"100%\" height=\"100%\">" + text + "</foreignObject>\n        </svg>\n      ";
+                }
+                var elementStyles = createStyleObjectForText(elementId);
+                Object.keys(elementStyles).forEach(function (key) {
+                    if (elementStyles[key]) {
+                        textElement.style[key] = elementStyles[key];
+                        if (key === 'z-index') {
+                            textElement.style[key] = String(parseInt(textElement.style[key]) + 3);
+                        }
+                    }
+                });
+                $element[0].appendChild(textElement);
+            }
+            function ifRatioExist(ratioName) {
+                var ratioExist = -1;
+                for (var i = 0; i < $scope.banner.ratios.length; i++) {
+                    if ($scope.banner.ratios[i].ratio === ratioName) {
+                        ratioExist = i;
+                    }
+                }
+                return ratioExist;
+            }
+            function ifElementExist(ratioKey, elementId) {
+                var elementExist = -1;
+                for (var i = 0; i < $scope.banner.ratios[ratioKey].elements.length; i++) {
+                    if ($scope.banner.ratios[ratioKey].elements[i].id === elementId) {
+                        elementExist = i;
+                    }
+                }
+                return elementExist;
+            }
+            function createStyle(key, styleKey, unit) {
+                var style = false;
+                for (var i = 0; i < $scope.banner.elements.length; i++) {
+                    if ($scope.banner.elements[i].id === key) {
+                        style = $scope.banner.elements[i].styles[styleKey];
+                    }
+                }
+                if (style !== false) {
+                    return style + unit;
+                }
+                else {
+                    return style;
+                }
+            }
+            // Calculate padding for ratio
+            function calculatePadding(styleKey, elementStyle) {
+                if (styleKey === 'padding-top' || styleKey === 'padding-bottom') {
+                    // set padding base on height
+                    return (elementStyle / 300) * height;
+                }
+                else {
+                    // set padding base on width
+                    return (elementStyle / 300) * width;
+                }
+            }
+            function createStyleByRatio(key, styleKey, unit) {
+                var elementStyle;
+                var padding;
+                if (styleKey == 'padding-top' ||
+                    styleKey == 'padding-bottom' ||
+                    styleKey == 'padding-right' ||
+                    styleKey == 'padding-left') {
+                    padding = true;
+                }
+                for (var i = 0; i < sortedRatioList.length; i++) {
+                    var ratio_1 = sortedRatioList[i][0];
+                    var styleFound = void 0;
+                    var thisRatio = ifRatioExist(ratio_1);
+                    if (thisRatio !== -1) {
+                        var thisElement = ifElementExist(thisRatio, key);
+                        if (thisElement !== -1) {
+                            if (styleKey in $scope.banner.ratios[thisRatio].elements[thisElement].styles) {
+                                // elementStyle =  $scope.banner.ratios[thisRatio].elements[thisElement].style[styleKey];
+                                elementStyle = $scope.banner.ratios[thisRatio].elements[thisElement].styles[styleKey];
+                                styleFound = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (styleFound) {
+                        break;
+                    }
+                }
+                if (elementStyle !== undefined) {
+                    if (padding) {
+                        return calculatePadding(styleKey, elementStyle) + unit;
+                    }
+                    return elementStyle + unit;
+                }
+                else {
+                    return false;
+                }
+            }
+            function createStyleObjectForImage(elementId) {
+                return {
+                    'animation-delay': animationDelay,
+                    'left': createStyleByRatio(elementId, 'left', '%'),
+                    'background-image': createBackground(elementId),
+                    'top': createStyleByRatio(elementId, 'top', '%'),
+                    'background-color': createStyleByRatio(elementId, 'background-color', ''),
+                    'width': createStyleByRatio(elementId, 'width', '%'),
+                    'min-height': createStyleByRatio(elementId, 'height', '%'),
+                    'padding-top': createStyleByRatio(elementId, 'padding-top', 'px'),
+                    'padding-bottom': createStyleByRatio(elementId, 'padding-bottom', 'px'),
+                    'padding-left': createStyleByRatio(elementId, 'padding-left', 'px'),
+                    'padding-right': createStyleByRatio(elementId, 'padding-right', 'px'),
+                    'z-index': createStyle(elementId, 'z-index', ''),
+                    'animation-duration': createStyle(elementId, 'animation-duration', ''),
+                    'opacity': createStyleByRatio(elementId, 'opacity', ''),
+                    'position': 'absolute',
+                    'display': 'block' // if it's always 'block', then it should land to the stylesheet
+                };
+            }
+            function createStyleObjectForText(elementId) {
+                return {
+                    'animation-delay': animationDelay,
+                    'left': createStyleByRatio(elementId, 'left', '%'),
+                    'top': createStyleByRatio(elementId, 'top', '%'),
+                    'font-size': createStyleByRatio(elementId, 'font-size', 'px'),
+                    'text-align': createStyleByRatio(elementId, 'text-align', ''),
+                    'background-color': createStyleByRatio(elementId, 'background-color', ''),
+                    'color': createStyleByRatio(elementId, 'color', ''),
+                    'width': createStyleByRatio(elementId, 'width', '%'),
+                    'padding-top': createStyleByRatio(elementId, 'padding-top', 'px'),
+                    'padding-bottom': createStyleByRatio(elementId, 'padding-bottom', 'px'),
+                    'padding-left': createStyleByRatio(elementId, 'padding-left', 'px'),
+                    'padding-right': createStyleByRatio(elementId, 'padding-right', 'px'),
+                    'z-index': createStyle(elementId, 'z-index', ''),
+                    'animation-duration': createStyle(elementId, 'animation-duration', ''),
+                    'opacity': createStyleByRatio(elementId, 'opacity', ''),
+                    'position': 'absolute',
+                    'display': 'block' // if it's always 'block', then it should land to the stylesheet
+                };
+            }
+        };
+    }
+    PreviewDirective.factory = function () {
+        var directive = function (AppResources, I18n, $analytics, Link, $translate) { return new PreviewDirective(AppResources, I18n, $analytics, Link, $translate); };
+        directive.$inject = ['AppResources', 'I18n', '$analytics', 'Link', '$translate'];
+        return directive;
+    };
+    return PreviewDirective;
+}());
+angular
+    .module('providers.collabco.banner')
+    .directive('previewDirective', PreviewDirective.factory());

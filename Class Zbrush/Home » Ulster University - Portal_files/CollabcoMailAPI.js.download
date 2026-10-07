@@ -1,0 +1,172 @@
+(() => {
+  'use strict';
+
+  angular
+    .module('providers.collabco.mail')
+    .factory('CollabcoMailAPI', CollabcoMailAPI);
+
+  CollabcoMailAPI.$inject = ['$q', 'OAuth'];
+  function CollabcoMailAPI($q, OAuth) {
+
+    const GRAPH_CONNECTION = 'msgraphmail';
+    const GRAPH_ENVIRONMENT = 'Global';
+
+    const API = new OAuth(GRAPH_CONNECTION, GRAPH_ENVIRONMENT, 'https://graph.microsoft.com/v1.0');
+
+    // reportMessage only exists on Graph's beta host — a separate client is required.
+    const API_BETA = new OAuth(GRAPH_CONNECTION, GRAPH_ENVIRONMENT, 'https://graph.microsoft.com/beta');
+
+    // API_BETA needs its own token, same as API — piggyback on the existing init() call site
+    // (backstage.js, tile.js) so callers don't need to know a second client exists.
+    const _init = API.init.bind(API);
+    API.init = async (...args) => {
+      await _init(...args);
+      await API_BETA.init();
+    };
+
+    API.batch = data => API.req({
+      method: 'POST',
+      url: `/$batch`,
+      data
+    });
+
+    API.getFolders = params => API.req({
+      method: 'GET',
+      url: `/me/mailFolders`,
+      params
+    });
+
+    API.getChildFolders = (parentId, params) => API.req({
+      method: 'GET',
+      url: `/me/mailFolders/${parentId}/childFolders`,
+      params
+    });
+
+    API.getFolderDetails = (folderId, params) => API.req({
+      method: 'GET',
+      url: `/me/mailFolders/${folderId}`,
+      params
+    });
+
+    API.createFolder = (parentFolderId, displayName) => API.req({
+      method: 'POST',
+      url: `/me/mailFolders/${parentFolderId}/childFolders`,
+      data: { displayName }
+    });
+
+    API.deleteFolder = folderId => API.req({
+      method: 'DELETE',
+      url: `/me/mailFolders/${folderId}`
+    });
+
+    API.deleteDraft = draftId => API.req({
+      method: 'DELETE',
+      url: `/me/mailFolders/drafts/messages/${draftId}`
+    })
+
+    API.getMessages = (folderId, params, timeout) => API.req({
+      method: 'GET',
+      url: `/me/mailFolders/${folderId}/messages`,
+      params,
+      timeout
+    });
+
+    API.getMessage = (messageId, params) => API.req({
+      method: 'GET',
+      url: `/me/messages/${messageId}`,
+      params,
+      cache: true
+    });
+
+    API.getAttachments = (messageId, params) => API.req({
+      method: 'GET',
+      url: `/me/messages/${messageId}/attachments`,
+      params,
+      cache: true
+    });
+
+    API.getAttachment = (messageId, attachmentId, params) => API.req({
+      method: 'GET',
+      url: `/me/messages/${messageId}/attachments/${attachmentId}`,
+      params,
+      cache: true
+    });
+
+    API.sendMail = data => API.req({
+      method: 'POST',
+      url: `/me/sendMail`,
+      data
+    });
+
+    API.createDraft = (messageId, draftType) => {
+      let url = `/me/messages`;
+
+      if (messageId && ['reply', 'replyall', 'forward'].includes(draftType.toLowerCase())) {
+        url += `/${messageId}/create${draftType}`;
+      }
+
+      return API.req({ method: 'POST', url });
+    };
+
+    API.saveDraft = (draft) => API.req({ method: 'POST', url: `/me/messages`, data: draft })
+
+    API.updateDraft = (draftId, data) => API.req({
+      method: 'PATCH',
+      url: `/me/messages/${draftId}`,
+      data,
+      headers: { Prefer: 'return=minimal' }
+    });
+
+    API.addAttachment = (draftId, data) => API.req({
+      method: 'POST',
+      url: `/me/messages/${draftId}/attachments`,
+      data
+    });
+
+    API.sendDraft = draftId => API.req({
+      method: 'POST',
+      url: `/me/messages/${draftId}/send`,
+      headers: { Prefer: 'return=minimal' }
+    });
+
+    API.toggleMessageRead = (messageId, isRead) => API.req({
+      method: 'PATCH',
+      url: `/me/messages/${messageId}`,
+      data: { isRead },
+      headers: { Prefer: 'return=minimal' }
+    });
+
+    API.setMessageImportance = (messageId, importance, params) => API.req({
+      method: 'PATCH',
+      url: `/me/messages/${messageId}`,
+      data: { importance },
+      params,
+      headers: { Prefer: 'return=minimal' }
+    });
+
+    API.deleteMessage = messageId => API.req({
+      method: 'DELETE',
+      url: `/me/messages/${messageId}`,
+      headers: { Prefer: 'return=minimal' }
+    });
+
+    API.moveMessage = (messageId, destinationFolderId) => API.req({
+      method: 'POST',
+      url: `/me/messages/${messageId}/move`,
+      data: { destinationFolderId },
+      headers: { Prefer: 'return=minimal' }
+    });
+
+    API.reportMessage = (messageId, reportAction) => API_BETA.req({
+      method: 'POST',
+      url: `/me/messages/${messageId}/reportMessage`,
+      data: {
+        IsMessageMoveRequested: true,
+        ReportAction: reportAction
+      }
+    });
+
+    return API;
+  }
+
+})();

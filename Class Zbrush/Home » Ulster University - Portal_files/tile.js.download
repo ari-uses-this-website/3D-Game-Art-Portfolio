@@ -1,0 +1,61 @@
+(() => {
+  'use strict';
+
+  angular
+    .module('tile.collabco.banner', [])
+    .controller('tile.collabco.banner', TileCtrl)
+    .dependencies = ['previewDirective'];
+
+  TileCtrl.$inject = ['$scope', '$analytics', 'UserProfile', 'UserDashboard', 'Sidebar', 'BannerApi', 'I18n'];
+  function TileCtrl($scope, $analytics, UserProfile, UserDashboard, Sidebar, BannerApi, I18n) {
+    const { tile } = $scope;
+
+    if (UserProfile.hasRolePermission(['TenantAdmin', 'BannerAdmin'])) {
+      Sidebar.modifyApp(tile, {
+        hidden: false,
+        state: 'app.collabco-banner.list'
+        // children: [{
+        //   name: 'app.collabco-banner.ADMINISTRATION',
+        //   icon: 'fa fa-gears',
+        //   state: 'app.collabco-banner.list'
+        // }]
+      });
+    }
+
+    // Banner impression
+    const bannerImpression = [];
+    tile.click = () => { };
+
+    tile.sliderOnChange = (current, next) => {
+      if (bannerImpression.indexOf(next) == -1) {
+        bannerImpression.push(next);
+        const banner = tile.content[next];
+        $analytics.eventTrack('Image', { category: 'Impression', label: `Title: ${banner.name} | URL: ${I18n.getLocalized(banner.links)}` });
+      }
+    };
+
+    tile.lang = I18n.lang;
+    tile.ratio = tile.getAspectRatio();
+
+    return BannerApi.getAllBannerEntriesForDashboard(UserDashboard.id)
+      .then(response => {
+        if (response.bannerEntries && response.bannerEntries.length) {
+          response.bannerEntries.forEach(banner => {
+            banner.translatedLink = I18n.getLocalized(banner.links, false);
+            if (!banner.translatedLink)
+              delete banner.translatedLink;
+          });
+          tile.setContent(response.bannerEntries);
+          tile.hideHeader = true;
+          tile.app.load('css/tile.css');
+          tile.app.load('css/animations.css');
+          tile.ready();
+          tile.carouselReady = true;
+        } else {
+          tile.error(null, 'app.collabco-banner.NO_BANNERS');
+        }
+      }, error => {
+        tile.error(null, 'app.collabco-banner.CANT_LOAD_BANNER_DATA');
+      });
+  }
+})();

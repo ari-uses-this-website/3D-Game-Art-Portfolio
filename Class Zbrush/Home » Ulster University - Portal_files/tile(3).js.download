@@ -1,0 +1,315 @@
+(function () {
+  'use strict';
+
+  angular
+    .module('tile.collabco.newsroom', [])
+    .controller('tile.collabco.newsroom', TileCtrl);
+
+  TileCtrl.$inject = ['$scope', '$http', '$q', 'moment', '$injector',  'I18n', 'FeaturesApi'];
+  function TileCtrl($scope, $http, $q, moment, $injector , I18n, FeaturesApi) {
+    var tile = $scope.tile;
+    var isLatestView = tile.settings.feedId ? !tile.settings.feedId.length : true;
+    var limit = tile.slideLimit || 5;
+    var limitPerFeed = Math.ceil(limit / (isLatestView ? 1 : tile.settings.feedId.length));
+    var tplPromise;
+    var maxAmount = 15;
+    var legacyApiBase = MydayLoader.bootstrap.legacyApiBaseUrl + '/news';
+    var newApiBase = MydayLoader.bootstrap.apiBaseUrl + '/newsroom/v2/news';
+    var newApiAvailable = $injector.has('Features') && $injector.get('Features').enabled('alerts-v3-kong');
+    var showImportance = tile.settings.showImportance;
+    var needFiltering = tile.settings.filter > -1;
+    var needSorting = tile.settings.sort === 'priorityDate';
+    // Control ellispis on tile.
+    var shortenSummary = tile.settings.shortenSummary;
+    var shortenLength = tile.settings.shortenCharacterLength;
+    
+    // So far the only non-default option is "priority, then date"
+    const IMPORTANCE = { Normal: 1, High: 2 };
+
+
+
+    let enabledLegacyFeatures = false;
+    FeaturesApi.getAllFeatures().then(res => {
+      const enabled = {};
+      for (const i in res) {
+        if (res[i].enabled) enabled[res[i].feature.id] = true;
+      }
+      enabledLegacyFeatures = enabled;
+    
+
+      if (tile.isTemplate('feed') || tile.isTemplate('multiline')) {
+        tplPromise = _tplFeedOrMultiline();
+      } else if (tile.isTemplate('info')) {
+        tplPromise = _tplInfo();
+      } else {
+        tplPromise = _tplIcon();
+      }
+
+      // Change state params for tile click
+      tile.stateParams = { partition: tile.settings.partition };
+      if (tile.settings.feedId.length === 1) {
+        tile.state = 'feed';
+        tile.stateParams.feedId = tile.settings.feedId[0];
+      }
+  
+      // Feed and multiline
+      tplPromise.then(function (data) {
+        if (data.length && tile.isTemplate('feed') || tile.isTemplate('multiline')) {
+  
+          var result = [];
+          var duplicateMap = {};
+  
+          data.forEach(function (d) {
+            if (!duplicateMap[d.id]) {
+              duplicateMap[d.id] = true;
+  
+  
+              if (d.image) {
+                d.image = d.image.indexOf('http') === 0 ? d.image : MydayLoader.bootstrap.cdnBaseUrl + '/' + MydayLoader.bootstrap.tenantId + '/uploads/' + d.image;
+              }
+  
+              var content = {
+                id: d.id,
+                title: d.title,
+                subtitle: d.summary,
+                image: d.image,
+                imageAlt: d.imageAlt,
+                updated: d.updated
+              };
+  
+              if (d.link) {
+                content.link = d.link
+              } else {
+                if (tile.settings.partition) {
+                  content.stateParams = {};
+                  content.stateParams.partition = tile.settings.partition;
+                }
+                if (d.feedId && d.id) {
+                  content.state = 'entry';
+                  content.stateParams = content.stateParams || {};
+                  content.stateParams.feedId = d.feedId;
+                  content.stateParams.entryId = d.id;
+                }
+              }
+              // Only set flag if its high importance and new api is available
+              if(newApiAvailable && showImportance){
+                content.importance = d.importance;
+              }
+  
+              result.push(content);
+            }
+          });
+  
+          if (newApiAvailable) {
+            result.sort(_sortCb);
+          }
+          if (needFiltering && newApiAvailable){
+            var data = result;
+            result = _filter(data);
+          }
+          // Shorten summary / subtitle on feed templates
+          if (tile.isTemplate('feed') && shortenSummary) {
+            result.forEach(item => {
+              item.subtitle = item.subtitle.substring(0, shortenLength) + '…';
+            })
+          }
+          tile.setContent(result);
+          tile.ready();
+        }
+        else if (data.length && tile.isTemplate('info') ){
+          if (data.length){
+            tile.setContent(data);
+            tile.ready();
+          }
+        } else {
+          tile.setEmpty();
+        }
+      }, function (error) {
+        tile.error(null, 'app.collabco-newsroom.CANT_LOAD_FEED_DATA');
+      });
+
+    });
+
+    function getURLPrefix(partitionId) {
+      return (newApiAvailable ? newApiBase : legacyApiBase) + (partitionId ? '/partition/' + partitionId : '');
+    }
+
+    function _tplFeedOrMultiline() {
+      return getData(true);
+    }
+
+    function _tplInfo() {
+      return getData(false).then(function (data) {
+        return _prepareInfoTplContent(_getTodayYesterdayThisWeek(data));
+      });
+    }
+
+    function _tplIcon() {
+      return getData(false).then(function (data) {
+        return [];
+      });
+    }
+
+    function getData(shouldLimitData) {
+
+      var promise;
+      if (tile.settings.feedId) {
+        promise = tile.settings.feedId.length ? $q.when(tile.settings.feedId) : _getLatestFeedIds();
+      } else { promise = _getLatestFeedIds(); }
+
+      return promise
+        .then(function (feedIds) {
+          var promises = feedIds.map(function (feedId) {
+            return _getFeed(feedId, shouldLimitData ? limitPerFeed : maxAmount);
+          });
+
+          return $q.all(promises);
+        })
+        .then(function (entryGroups) {
+          var entries = [];
+
+          if (isLatestView) {
+            // Latest view - sort ALL entries from ALL feeds and take just top X newest entries
+            entryGroups.forEach(function (entryGroup) {
+              entries = entries.concat(entryGroup);
+            });
+            entries = _dropFutureEntries(entries);
+          } else {
+            // Other views - take X newest entries per feed
+            entryGroups.forEach(function (entryGroup) {
+              entryGroup = _sortEntries(entryGroup);
+              entryGroup = _dropFutureEntries(entryGroup);
+              if (shouldLimitData) {
+                entryGroup = entryGroup.slice(0, limitPerFeed);
+              }
+              entries = entries.concat(entryGroup);
+            });
+          }
+
+          entries = _sortEntries(entries);
+          if (shouldLimitData) {
+            entries = entries.slice(0, limit);
+          }
+          return entries;
+        });
+    }
+
+    function _getLatestFeedIds() {
+      return $http.get(getURLPrefix(tile.settings.partition)).then(function (response) {
+        // Filter based on language
+        const feeds = enabledLegacyFeatures['newsroom-languages']
+        ? response.data.feeds.filter(f=> !f.targetLanguage||f.targetLanguage === I18n.lang)
+        : response.data.feeds;
+
+        return feeds.map(function (feed) {
+          return feed.id;
+        });
+      });
+    }
+
+    function _getFeed(feedId, amount) {
+      var deferredGetFeed = $q.defer();
+      var feed = [];
+
+      $http.get(getURLPrefix(tile.settings.partition) + '/' + feedId + '/entries?amount=' + amount).then(function (response) {
+        feed = response.data.model;
+        deferredGetFeed.resolve(feed);
+      }, function (error) {
+        deferredGetFeed.resolve(feed);
+        console.log('[Newsroom] Could get get feed entries for feedId');
+      });
+
+      return deferredGetFeed.promise;
+    }
+
+    function _getTodayYesterdayThisWeek(entries) {
+      var todayEntries = 0;
+      var yesterdayEntries = 0;
+      var thisWeekEntries = 0;
+
+      var today = moment();
+      var yesterday = moment().subtract(1, 'days');
+
+      entries.forEach(function (entry) {
+        var created = moment(entry.created);
+
+        if (created.isSame(today, 'day')) {
+          todayEntries++;
+        } else if (created.isSame(yesterday, 'day')) {
+          yesterdayEntries++;
+        }
+        if (created.isSame(today, 'week')) {
+          thisWeekEntries++;
+        }
+      });
+
+      return {
+        today: todayEntries,
+        yesterday: yesterdayEntries,
+        thisWeek: thisWeekEntries
+      };
+    }
+
+    function _prepareInfoTplContent(tyw) {
+      return [{
+        title: tyw.today > 99 ? '99+' : tyw.today,
+        subtitle: 'app.collabco-newsroom.TODAY',
+        translationMap: { title: false, subtitle: true }
+      }, {
+        title: tyw.yesterday > 99 ? '99+' : tyw.yesterday,
+        subtitle: 'app.collabco-newsroom.YESTERDAY',
+        translationMap: { title: false, subtitle: true }
+      }, {
+        title: tyw.thisWeek > 99 ? '99+' : tyw.thisWeek,
+        subtitle: 'app.collabco-newsroom.THIS_WEEK',
+        translationMap: { title: false, subtitle: true }
+      }];
+    }
+
+    function _sortEntries(entries) {
+      return entries.sort(function (entry1, entry2) {
+
+        if (!entry1.createdTimestamp) entry1.createdTimestamp = +new Date(entry1.created);
+        if (!entry2.createdTimestamp) entry2.createdTimestamp = +new Date(entry2.created);
+        return entry2.createdTimestamp - entry1.createdTimestamp;
+      });
+    }
+
+    function _dropFutureEntries(entries) {
+      var now = +new Date();
+      return entries.filter(function (entry) {
+        if (!entry.createdTimestamp) entry.createdTimestamp = +new Date(entry.created);
+        return entry.createdTimestamp < now;
+      });
+    }
+
+    function _sortCb(a, b) {
+      if(needSorting){
+        // Pull items with priority[/ importance] to the top
+        if (a.importance !== b.importance) {
+          return IMPORTANCE[b.importance] - IMPORTANCE[a.importance];
+        }
+      }
+      // If priority is the same, base it on timestamp.
+      if (a.updated < b.updated) return 1;
+      if (a.updated > b.updated) return -1;
+
+      return 0;
+    }
+
+    function _filter(data) {
+      // Getting the "now" timestamp on each $watchCollection iteration,
+      // to make sure we account for users accessing the app during midnight
+      // or to continuously bump the "since 10 minutes ago"
+      var start = tile.settings.filter === 0 ?
+        +new Date().setHours(0, 0, 0, 0) : // since midnight
+        +new Date() - (tile.settings.filter * 60 * 1000); // since minus X minutes ago
+
+      // Filter method does not mutate reference array
+      return data.filter(function (x) {
+        return +new Date(x.updated) >= start;
+      });
+    }
+
+  }
+})();

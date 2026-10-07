@@ -1,0 +1,35 @@
+(function() {
+  'use strict';
+
+  angular
+    .module('tile.collabco.statictiles', [])
+    .controller('tile.collabco.statictiles', TileCtrl);
+
+  TileCtrl.$inject = ['$scope', 'I18n', 'Link', 'Sidebar'];
+  function TileCtrl($scope, I18n, Link, Sidebar) {
+    const { tile } = $scope;
+
+    if (tile.settings && tile.settings.links) {
+      const link = I18n.getLocalized(tile.settings.links, false);
+
+      if (link) {
+        if (tile.settings.embed) {
+          tile.stateParams = { $title: I18n.getLocalized(tile.titles), link };
+          Sidebar.modifyApp(tile, { href: null, state: tile.app.state, stateParams: tile.stateParams });
+        } else {
+          tile.click = () => Link.open(link, tile.settings.newTab);
+          Sidebar.modifyApp(tile, { href: link, state: null, newTab: tile.settings.newTab });
+        }
+
+      } else {
+        tile.click = () => {};
+        Sidebar.modifyApp(tile, { hidden: true });
+      }
+    } else {
+      Sidebar.modifyApp(tile, { hidden: true });
+    }
+
+    tile.ready();
+  }
+
+})();

@@ -1,0 +1,70 @@
+(() => {
+  'use strict';
+
+  angular
+    .module('tile.collabco.mail', [])
+    .controller('tile.collabco.mail', TileCtrl)
+    .dependencies = ['CollabcoMailAPI'];
+
+  TileCtrl.$inject = ['$scope', 'Sidebar', 'Link', 'CollabcoMailAPI', 'moment'];
+  function TileCtrl($scope, Sidebar, Link, CollabcoMailAPI, moment) {
+    (async() => {
+      const tile = $scope.tile;
+
+      const href = tile.settings.noBackstage && tile.settings.linkUrl;
+      if (href) {
+        Sidebar.modifyApp(tile, { href, newTab: true, state: undefined });
+        tile.click = () => Link.open(href, true);
+      }
+
+      try {
+        await CollabcoMailAPI.init();
+
+        if (tile.isTemplate('info')) {
+          const inbox = await CollabcoMailAPI.getFolderDetails('Inbox', { $select: 'unreadItemCount' });
+
+          Sidebar.modifyApp(tile, { notifications: inbox.unreadItemCount });
+
+          tile.setContent([{
+            title: inbox.unreadItemCount,
+            subtitle: 'app.collabco-mail.UNREAD',
+            translationMap: { subtitle: true }
+          }]);
+        } else if (tile.isTemplate('multiline') || tile.isTemplate('feed')) {
+          const unread = await CollabcoMailAPI.getMessages('Inbox', { $filter: 'isRead eq false', $count: true, $top: tile.slideLimit || 5 });
+
+          Sidebar.modifyApp(tile, { notifications: unread['@odata.count'] });
+
+          const content = unread.value.map(msg => ({
+            title: msg.subject,
+            subtitle: `${msg.from && msg.from.emailAddress && msg.from.emailAddress.name || 'Unknown'}, ${moment(msg.receivedDateTime).format('Do MMM YYYY')}`,
+            state: tile.settings.openMail ? 'folder.message' : '',
+            stateParams: tile.settings.openMail ? { messageId: msg.id } : {}
+          }));
+
+          const allReadContent = [{
+            title: 'app.collabco-mail.ALLREAD',
+            translationMap: { title: true }
+          }];
+ 
+          if (content.length) {
+            tile.setContent(content);
+          } else {
+            tile.setContent(allReadContent);
+          }
+        }
+
+        tile.ready();
+
+      } catch (error) {
+        if (error && error.status === 404) {
+          tile.click = () => CollabcoMailAPI.authorize();
+          tile.error('app.collabco-mail.UNATHORISED', 'app.collabco-mail.CLICK_TO_GRANT_ACCESS_TO_YOUR_MAILBOX');
+        } else {
+          console.log('EX', error);
+          tile.error('app.collabco-mail.CANT_LOAD_DATA_FROM_OFFICE_365', null);
+        }
+      }
+    })();
+  }
+})();

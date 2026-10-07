@@ -1,0 +1,49 @@
+.page--dashboard-students h2{
+  font-size: 26px;
+}
+
+.page--dashboard-staff h2{
+  font-size: 26px;
+}
+
+.page--dashboard-research h2{
+  font-size: 26px;
+}
+
+.page--dashboard-home h2{
+  font-size: 26px;
+}
+
+/* New Learning and Teaching Dashboard */
+.page--dashboard-learning h2{
+  font-size: 22px;
+}
+
+
+/* New HOME 2025 Dashboard */
+.page--dashboard-home-25 h2{
+  font-size: 20px;
+}
+
+
+
+
+/* New HOME Dashboard */
+//.page--dashboard-home-24 h2{
+//  font-size: 12px;
+//}
+
+/* New STAFF Dashboard */
+//.page--dashboard-staff-2024 h2{
+//  font-size: 12px;
+//}
+
+
+
+
+/* Remove Dashboard Personalise buttons */
+.md-header__section--dashboard div:first-child { display: none; }
+
+.page--dashboard-admin .tile__wrapper {
+  cursor: pointer;
+}
